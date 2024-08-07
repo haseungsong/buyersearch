@@ -1,11 +1,194 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
+<!DOCTYPE html><html lang="en"><head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Power BI Report</title>
-</head>
-<body>
-    <iframe width="1280" height="800" src="https://app.powerbi.com/links/JgQcOLQGRS?ctid=631951cf-2c3a-42b2-8fe7-d053cb13a598&pbi_source=linkShare" frameborder="0" allowFullScreen="true"></iframe>
-</body>
-</html>
+    <title>Kotra Inquiry Portal</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/4.5.2/css/bootstrap.min.css">
+    <style>
+        body {
+            font-family: Arial, Helvetica, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f4f4f9;
+        }
+        .error-message {
+            color: red;
+            margin-top: 10px;
+        }
+    </style></head><body>
+    <h1>[Kotra SP] Buyer search and Display</h1>
+    <div id="search-container" class="input-group mb-3">
+        <input type="text" id="search-input" class="form-control" placeholder="Enter search keyword" onkeypress="handleKeyPress(event)">
+        <div class="input-group-append">
+            <button class="btn btn-primary" onclick="searchData()">Search</button>
+            <button class="btn btn-danger" onclick="clearResults()">Delete</button>
+        </div>
+    </div>
+    <div id="error-message" class="error-message"></div>
+    <div id="visualization-container"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+    <script>
+        let db;
+        let csvData = [];
+
+        async function fetchCSV() {
+            const url = 'https://raw.githubusercontent.com/haseungsong/buyersearch/main/Buyersearch.csv';
+            const response = await fetch(url);
+            const text = await response.text();
+            return text;
+        }
+
+        function parseCSV(data) {
+            return new Promise((resolve) => {
+                Papa.parse(data, {
+                    header: true,
+                    complete: function(results) {
+                        resolve(results.data);
+                    }
+                });
+            });
+        }
+
+        function initDB() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open('KotraDB', 1);
+
+                request.onupgradeneeded = function(event) {
+                    db = event.target.result;
+                    db.createObjectStore('buyers', { keyPath: 'NCM' });
+                };
+
+                request.onsuccess = function(event) {
+                    db = event.target.result;
+                    resolve();
+                };
+
+                request.onerror = function(event) {
+                    console.error('IndexedDB error:', event.target.errorCode);
+                    reject();
+                };
+            });
+        }
+
+        function storeData(data) {
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction(['buyers'], 'readwrite');
+                const store = transaction.objectStore('buyers');
+
+                data.forEach(item => {
+                    store.put(item);
+                });
+
+                transaction.oncomplete = function() {
+                    resolve();
+                };
+
+                transaction.onerror = function(event) {
+                    console.error('Transaction error:', event.target.errorCode);
+                    reject();
+                };
+            });
+        }
+
+        async function loadData() {
+            const data = await fetchCSV();
+            const parsedData = await parseCSV(data);
+            await storeData(parsedData);
+            csvData = parsedData;
+        }
+
+        async function searchData() {
+            const query = document.getElementById('search-input').value.trim();
+            const errorMessageElement = document.getElementById('error-message');
+
+            if (!/^\d{6,}$/.test(query)) {
+                errorMessageElement.textContent = 'Please enter at least 6 characters in number starting from left.';
+                return;
+            }
+
+            errorMessageElement.textContent = '';
+
+            const transaction = db.transaction(['buyers'], 'readonly');
+            const store = transaction.objectStore('buyers');
+            const request = store.getAll();
+
+            request.onsuccess = function(event) {
+                const results = event.target.result;
+                const filteredData = results.filter(row => row['NCM'] && row['NCM'].toString().startsWith(query));
+
+                if (filteredData.length === 0) {
+                    errorMessageElement.textContent = 'No matching records found.';
+                    return;
+                }
+
+                displayResults(filteredData);
+            };
+
+            request.onerror = function(event) {
+                console.error('Search error:', event.target.errorCode);
+            };
+        }
+
+        function clearResults() {
+            const container = document.getElementById('visualization-container');
+            container.innerHTML = '';
+            document.getElementById('search-input').value = '';
+            document.getElementById('error-message').textContent = '';
+        }
+
+        function handleKeyPress(event) {
+            if (event.key === 'Enter') {
+                searchData();
+            }
+        }
+
+        function displayResults(data) {
+            const container = document.getElementById('visualization-container');
+            container.innerHTML = '';
+            createTableWithSum(data);
+        }
+
+        function createTableWithSum(data) {
+            const table = document.createElement('table');
+            table.className = 'table table-striped';
+
+            const thead = document.createElement('thead');
+            const tbody = document.createElement('tbody');
+
+            const headerRow = document.createElement('tr');
+            Object.keys(data[0]).forEach(header => {
+                const th = document.createElement('th');
+                th.textContent = header;
+                headerRow.appendChild(th);
+            });
+            thead.appendChild(headerRow);
+
+            data.forEach(row => {
+                const tr = document.createElement('tr');
+                Object.values(row).forEach(cell => {
+                    const td = document.createElement('td');
+                    td.textContent = cell;
+                    tr.appendChild(td);
+                });
+                tbody.appendChild(tr);
+            });
+
+            const totalSum = data.reduce((sum, row) => sum + (parseFloat(row['VALOR FOB ESTIMADO TOTAL']) || 0), 0);
+            const totalRow = document.createElement('tr');
+            const totalCell = document.createElement('td');
+            totalCell.colSpan = Object.keys(data[0]).length;
+            totalCell.textContent = `Total VALOR FOB ESTIMADO TOTAL: ${totalSum}`;
+            totalCell.style.fontWeight = 'bold';
+            totalRow.appendChild(totalCell);
+            tbody.appendChild(totalRow);
+
+            table.appendChild(thead);
+            table.appendChild(tbody);
+            container.appendChild(table);
+        }
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            await initDB();
+            await loadData();
+        });
+    </script></body></html>
